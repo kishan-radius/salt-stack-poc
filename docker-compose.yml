@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  master1:
+    build: .
+    container_name: ubuntu-master1
+    hostname: master1
+    privileged: true
+    ports:
+      - "2221:22"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - salt-network
+
+  minion1:
+    build: .
+    container_name: ubuntu-minion1
+    hostname: minion1
+    privileged: true
+    ports:
+      - "2222:22"
+      - "8080:8080"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - salt-network
+
+  minion2:
+    build: .
+    container_name: ubuntu-minion2
+    hostname: minion2
+    privileged: true
+    ports:
+      - "2223:22"
+      - "8081:8080"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - salt-network
+
+  minion3:
+    build: .
+    container_name: ubuntu-minion3
+    hostname: minion3
+    privileged: true
+    ports:
+      - "2224:22"
+      - "8082:8080"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - salt-network
+
+  minion4:
+    build: .
+    container_name: ubuntu-minion4
+    hostname: minion4
+    privileged: true
+    ports:
+      - "2225:22"
+      - "8083:8080"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - salt-network
+
+networks:
+  salt-network:
+    driver: bridge

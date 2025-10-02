@@ -1,0 +1,204 @@
+---
+- name: Install Salt Master with Basic Configuration
+  hosts: masters
+  become: yes
+
+  tasks:
+    - name: Ensure Python apt module is installed
+      raw: |
+        apt-get update && apt-get install -y python3-apt
+      changed_when: true
+
+    - name: Gather facts after Python is available
+      setup:
+
+    - name: Install basic requirements
+      apt:
+        name:
+          - curl
+          - vim
+          - gnupg2
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Salt Project GPG public key
+      get_url:
+        url: https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public
+        dest: /etc/apt/keyrings/salt-archive-keyring.pgp
+        mode: "0644"
+
+    - name: Download and install Salt sources configuration
+      get_url:
+        url: https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources
+        dest: /etc/apt/sources.list.d/salt.sources
+        mode: "0644"
+
+    - name: Pin Salt packages to version 3006
+      copy:
+        content: |
+          Package: salt-*
+          Pin: version 3006.*
+          Pin-Priority: 1001
+        dest: /etc/apt/preferences.d/salt-pin-1001
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Remove existing Salt packages if present
+      apt:
+        name:
+          - salt-master
+          - salt-ssh
+          - salt-syndic
+          - salt-api
+          - salt-common
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Salt master packages (version 3006)
+      apt:
+        name:
+          - salt-master
+          - salt-ssh
+          - salt-syndic
+          - salt-api
+        state: present
+
+    - name: Stop Salt services before cleanup
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - salt-master
+        - salt-api
+        - salt-syndic
+      ignore_errors: yes
+
+    - name: Remove old systemd override directories
+      file:
+        path: "/etc/systemd/system/{{ item }}.service.d"
+        state: absent
+      loop:
+        - salt-master
+        - salt-api
+        - salt-syndic
+
+    - name: Reload systemd daemon after removing overrides
+      systemd:
+        daemon_reload: yes
+
+    - name: Create basic Salt master configuration
+      copy:
+        content: |
+          # Basic Salt Master Configuration
+          # Interface to bind to (0.0.0.0 allows connections from minions)
+          interface: 0.0.0.0
+
+          # Auto accept all minion keys (for POC only - not for production!)
+          auto_accept: True
+
+          # Basic logging
+          log_level: warning
+        dest: /etc/salt/master
+        owner: root
+        group: root
+        mode: "0644"
+        backup: yes
+
+    - name: Configure sudoers for ubuntu user to run salt commands without password
+      copy:
+        content: |
+          # Allow ubuntu to run salt commands without password
+          ubuntu ALL=(ALL) NOPASSWD: /usr/bin/salt, /usr/bin/salt-*, /usr/local/bin/salt, /usr/local/bin/salt-*
+        dest: /etc/sudoers.d/salt-ubuntu
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+    - name: Create wrapper scripts for Salt commands
+      copy:
+        content: |
+          #!/bin/bash
+          exec sudo /usr/bin/{{ item }} "$@"
+        dest: /usr/local/bin/{{ item }}
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - salt
+        - salt-key
+        - salt-run
+        - salt-call
+        - salt-ssh
+        - salt-cp
+
+    - name: Update PATH for ubuntu user
+      lineinfile:
+        path: /home/ubuntu/.bashrc
+        line: "export PATH=/usr/local/bin:$PATH"
+        state: present
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Start and enable Salt master service
+      systemd:
+        name: salt-master
+        state: restarted
+        enabled: yes
+
+    - name: Start and enable Salt API service
+      systemd:
+        name: salt-api
+        state: restarted
+        enabled: yes
+      ignore_errors: yes
+
+    - name: Start and enable Salt syndic service
+      systemd:
+        name: salt-syndic
+        state: restarted
+        enabled: yes
+      ignore_errors: yes
+
+    - name: Wait for Salt master to start
+      wait_for:
+        port: 4505
+        host: 0.0.0.0
+        delay: 3
+        timeout: 30
+
+    - name: Verify Salt master installation
+      command: salt --version
+      register: salt_version
+      changed_when: false
+
+    - name: Check Salt master status
+      command: systemctl is-active salt-master
+      register: master_status
+      changed_when: false
+
+    - name: List Salt keys
+      command: salt-key -L
+      register: salt_keys
+      changed_when: false
+
+    - name: Display installation results
+      debug:
+        msg:
+          - "Salt Version: {{ salt_version.stdout }}"
+          - "Master Status: {{ master_status.stdout }}"
+          - "Salt Keys:"
+          - "{{ salt_keys.stdout_lines }}"

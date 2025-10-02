@@ -1,0 +1,163 @@
+---
+- name: Install Salt Minion with Basic Configuration
+  hosts: minions
+  become: yes
+
+  tasks:
+    - name: Ensure Python apt module is installed
+      raw: |
+        apt-get update && apt-get install -y python3-apt
+      changed_when: true
+
+    - name: Gather facts after Python is available
+      setup:
+
+    - name: Install basic requirements
+      apt:
+        name:
+          - curl
+          - gnupg2
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Salt Project GPG public key
+      get_url:
+        url: https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public
+        dest: /etc/apt/keyrings/salt-archive-keyring.pgp
+        mode: '0644'
+
+    - name: Download and install Salt sources configuration
+      get_url:
+        url: https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources
+        dest: /etc/apt/sources.list.d/salt.sources
+        mode: '0644'
+
+    - name: Pin Salt packages to version 3006
+      copy:
+        content: |
+          Package: salt-*
+          Pin: version 3006.*
+          Pin-Priority: 1001
+        dest: /etc/apt/preferences.d/salt-pin-1001
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Remove existing Salt packages if present
+      apt:
+        name:
+          - salt-minion
+          - salt-common
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Salt minion package (version 3006)
+      apt:
+        name: salt-minion
+        state: present
+
+    - name: Stop Salt minion for configuration
+      systemd:
+        name: salt-minion
+        state: stopped
+
+    - name: Create basic Salt minion configuration
+      copy:
+        content: |
+          # Basic Salt Minion Configuration
+          # The address of the Salt master
+          master: master1
+
+          # Basic logging
+          log_level: warning
+        dest: /etc/salt/minion
+        owner: root
+        group: root
+        mode: "0644"
+        backup: yes
+
+    - name: Set minion ID
+      copy:
+        content: "{{ inventory_hostname }}"
+        dest: /etc/salt/minion_id
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Remove old minion keys if they exist
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/salt/pki/minion/minion.pem
+        - /etc/salt/pki/minion/minion.pub
+        - /etc/salt/pki/minion/minion_master.pub
+
+    - name: Configure sudoers for ubuntu user to run salt-call without password
+      copy:
+        content: |
+          # Allow ubuntu to run salt-call without password
+          ubuntu ALL=(ALL) NOPASSWD: /usr/bin/salt-call, /usr/local/bin/salt-call
+        dest: /etc/sudoers.d/salt-ubuntu
+        owner: root
+        group: root
+        mode: "0440"
+        validate: 'visudo -cf %s'
+
+    - name: Create salt-call alias in ubuntu user's bashrc
+      blockinfile:
+        path: /home/ubuntu/.bashrc
+        block: |
+          # Salt command alias - run without typing sudo
+          alias salt-call='sudo salt-call'
+        marker: "# {mark} ANSIBLE MANAGED SALT ALIASES"
+        create: yes
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Start and enable Salt minion service
+      systemd:
+        name: salt-minion
+        state: started
+        enabled: yes
+
+    - name: Wait for minion to connect to master
+      pause:
+        seconds: 5
+
+    - name: Verify Salt minion installation
+      command: salt-minion --version
+      register: salt_version
+      changed_when: false
+
+    - name: Check Salt minion status
+      command: systemctl is-active salt-minion
+      register: minion_status
+      changed_when: false
+
+    - name: Test connection to master
+      command: salt-call test.ping
+      register: ping_test
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display installation results
+      debug:
+        msg:
+          - "Salt Minion Version: {{ salt_version.stdout }}"
+          - "Minion Status: {{ minion_status.stdout }}"
+          - "Minion ID: {{ inventory_hostname }}"
+          - "Master: master1"
+          - "Connection Test: {{ ping_test.stdout | default('Pending key acceptance') }}"

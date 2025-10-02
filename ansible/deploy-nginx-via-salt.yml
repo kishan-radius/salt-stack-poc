@@ -1,0 +1,163 @@
+---
+- name: Deploy Nginx on all minions via Salt commands from master
+  hosts: masters
+  become: yes
+
+  tasks:
+    - name: Check if Docker is installed on all minions
+      shell: |
+        salt '*' cmd.run 'docker --version'
+      register: docker_check
+      ignore_errors: yes
+
+    - name: Display Docker status
+      debug:
+        msg: "Docker status: {{ docker_check.stdout }}"
+
+    - name: Create nginx content directory on all minions
+      shell: |
+        salt '*' cmd.run 'mkdir -p /opt/nginx-content'
+
+    - name: Create HTML template file locally on master
+      copy:
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Nginx on HOSTNAME_PLACEHOLDER</title>
+              <style>
+                  body {
+                      font-family: Arial, sans-serif;
+                      display: flex;
+                      justify-content: center;
+                      align-items: center;
+                      height: 100vh;
+                      margin: 0;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      color: white;
+                  }
+                  .container {
+                      text-align: center;
+                      padding: 50px;
+                      background: rgba(255, 255, 255, 0.1);
+                      border-radius: 20px;
+                      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+                      backdrop-filter: blur(4px);
+                      border: 1px solid rgba(255, 255, 255, 0.18);
+                  }
+                  h1 {
+                      font-size: 48px;
+                      margin: 0;
+                      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                  }
+                  p {
+                      font-size: 20px;
+                      margin-top: 20px;
+                      opacity: 0.9;
+                  }
+                  .hostname {
+                      font-weight: bold;
+                      color: #FFD700;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>This is <span class="hostname">HOSTNAME_PLACEHOLDER</span></h1>
+                  <p>Nginx container deployed via Salt</p>
+                  <p>Running on port 8080</p>
+                  <p>Deployed from Salt Master</p>
+              </div>
+          </body>
+          </html>
+        dest: /tmp/index_template.html
+        mode: '0644'
+
+    - name: Create customized HTML files for each minion
+      shell: |
+        for minion in minion1 minion2 minion3 minion4; do
+          sed "s/HOSTNAME_PLACEHOLDER/$minion/g" /tmp/index_template.html > /tmp/index_$minion.html
+        done
+
+    - name: Copy HTML files to respective minions
+      shell: |
+        salt-cp 'minion1' /tmp/index_minion1.html /opt/nginx-content/index.html
+        salt-cp 'minion2' /tmp/index_minion2.html /opt/nginx-content/index.html
+        salt-cp 'minion3' /tmp/index_minion3.html /opt/nginx-content/index.html
+        salt-cp 'minion4' /tmp/index_minion4.html /opt/nginx-content/index.html
+
+    - name: Set ownership on HTML files
+      shell: |
+        salt '*' cmd.run 'chown ubuntu:ubuntu /opt/nginx-content/index.html'
+
+    - name: Set permissions on HTML files
+      shell: |
+        salt '*' cmd.run 'chmod 644 /opt/nginx-content/index.html'
+
+    - name: Pull nginx image on all minions
+      shell: |
+        salt '*' cmd.run 'docker pull nginx:alpine'
+      register: pull_result
+
+    - name: Stop existing nginx containers if present
+      shell: |
+        salt '*' cmd.run 'docker stop nginx-web 2>/dev/null || true'
+      ignore_errors: yes
+
+    - name: Remove existing nginx containers if present
+      shell: |
+        salt '*' cmd.run 'docker rm nginx-web 2>/dev/null || true'
+      ignore_errors: yes
+
+    - name: Run nginx containers on all minions
+      shell: |
+        salt '*' cmd.run 'docker run -d --name nginx-web -p 8080:80 -v /opt/nginx-content/index.html:/usr/share/nginx/html/index.html:ro --restart always nginx:alpine'
+      register: container_run
+
+    - name: Wait for containers to start
+      pause:
+        seconds: 3
+
+    - name: Verify nginx containers are running
+      shell: |
+        salt '*' cmd.run 'docker ps --filter name=nginx-web'
+      register: container_status
+
+    - name: Test nginx connectivity on all minions
+      shell: |
+        salt '*' cmd.run 'curl -I localhost:8080'
+      register: nginx_test
+      ignore_errors: yes
+
+    - name: Display deployment status
+      debug:
+        msg:
+          - "===== DEPLOYMENT COMPLETE ====="
+          - ""
+          - "Nginx containers are running on all minions"
+          - ""
+          - "Access URLs:"
+          - "  minion1: http://localhost:8080"
+          - "  minion2: http://localhost:8081"
+          - "  minion3: http://localhost:8082"
+          - "  minion4: http://localhost:8083"
+          - ""
+          - "Each page displays: 'This is [minion-name]'"
+          - "============================="
+
+    - name: Show container status on all minions
+      debug:
+        msg: "{{ container_status.stdout }}"
+
+    - name: Verify unique content on each minion
+      shell: |
+        for minion in minion1 minion2 minion3 minion4; do
+          echo "=== $minion ==="
+          salt "$minion" cmd.run "curl -s localhost:8080 | grep -o 'This is.*</span>'"
+        done
+      register: content_check
+      ignore_errors: yes
+
+    - name: Display content verification
+      debug:
+        msg: "{{ content_check.stdout_lines }}"
